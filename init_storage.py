@@ -43,14 +43,25 @@ def build_connection_string() -> str:
     string containing '=', ';', or ':' characters gets corrupted during
     Docker Compose YAML variable substitution.
 
-    Required env vars:
-        AZURITE_ACCOUNT_KEY  — the storage account key
+    Env vars:
+        AZURITE_ACCOUNT_KEY  — the storage account key (falls back to the
+                               well-known public Azurite development key)
         AZURITE_HOST         — hostname of the Azurite container (default: azurite)
         AZURITE_PORT         — blob service port (default: 10000)
     """
-    key  = os.environ["AZURITE_ACCOUNT_KEY"]
+    # Azurite's fixed, publicly documented development key.
+    # It is the same on every machine and only works with the local emulator,
+    # not with real Azure Storage — safe to use as a hardcoded default.
+    AZURITE_DEFAULT_KEY = (
+        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tiq"
+        "nDkHl02wH0bM68pPQJQiKsQ=="
+    )
+
+    key  = os.environ.get("AZURITE_ACCOUNT_KEY") or AZURITE_DEFAULT_KEY
     host = os.environ.get("AZURITE_HOST", "azurite")
     port = os.environ.get("AZURITE_PORT", "10000")
+
+    logging.info("Using account key (last 6 chars): ...%s", key[-6:])
 
     return (
         f"DefaultEndpointsProtocol=http;"
