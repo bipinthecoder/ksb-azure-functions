@@ -41,12 +41,7 @@ services:
       # Use Node.js (built into the Azurite image) to probe the TCP port.
       # Exits 0 if the port is open, 1 if not — Docker uses this to know
       # when Azurite is ready before starting dependent services.
-      test: >
-        CMD-SHELL node -e
-        "const net=require('net');
-         const s=net.createConnection(10000,'127.0.0.1');
-         s.on('connect',()=>{s.destroy();process.exit(0)});
-         s.on('error',()=>process.exit(1))"
+      test: ["CMD-SHELL", "node -e \"require('net').createConnection(10000,'127.0.0.1').on('connect',function(){process.exit(0)}).on('error',function(){process.exit(1)})\""]
       interval: 5s
       timeout: 5s
       retries: 10
