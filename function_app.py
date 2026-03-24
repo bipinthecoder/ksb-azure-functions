@@ -22,12 +22,15 @@ High-level flow
 
 Environment variables (set in local.settings.json for local dev,
 or as App Settings in Azure):
-    AzureWebJobsStorage   — storage account connection string (trigger)
-    STORAGE_ACCOUNT_NAME  — storage account name  (to build HTTPS URLs)
-    COSMOS_DB_ENDPOINT    — https://<account>.documents.azure.com:443/
-    COSMOS_DB_KEY         — Cosmos DB primary or secondary key
-    COSMOS_DB_DATABASE    — Cosmos DB database name
-    COSMOS_DB_CONTAINER   — Cosmos DB container (collection) name
+    AzureWebJobsStorage        — storage account connection string (trigger + SDK)
+    STORAGE_BLOB_BASE_URL      — base URL used to build blob HTTPS URLs stored in Cosmos DB
+                                  Local Docker : http://localhost:10000/devstoreaccount1
+                                  Azure        : https://<account>.blob.core.windows.net
+    COSMOS_DB_ENDPOINT         — https://<account>.documents.azure.com:443/
+    COSMOS_DB_KEY              — Cosmos DB primary or secondary key
+    COSMOS_DB_DATABASE         — Cosmos DB database name
+    COSMOS_DB_CONTAINER        — Cosmos DB container (collection) name
+    COSMOS_DB_DISABLE_SSL_VERIFY — set to "true" when using the local Cosmos DB emulator
 """
 
 import io
@@ -39,7 +42,7 @@ import zipfile
 from datetime import datetime, timezone
 
 import azure.functions as func
-from azure.cosmos import CosmosClient, exceptions
+from azure.cosmos import CosmosClient, PartitionKey, exceptions
 from azure.storage.blob import BlobServiceClient
 
 # ---------------------------------------------------------------------------
@@ -192,10 +195,11 @@ def _upload_zip_contents(
     connection_string = os.environ["AzureWebJobsStorage"]
     blob_service = BlobServiceClient.from_connection_string(connection_string)
 
-    # Derive the storage account name for building HTTPS URLs.
-    # When running in Azure the account name is in the connection string;
-    # for local Azurite emulator we fall back to the env var.
-    storage_account_name = os.environ.get("STORAGE_ACCOUNT_NAME", "devstoreaccount1")
+    # STORAGE_BLOB_BASE_URL controls the URL prefix stored in Cosmos DB.
+    # Use the full Azure URL in production; use the localhost Azurite URL locally.
+    # e.g. locally:  http://localhost:10000/devstoreaccount1
+    #      in Azure: https://ksbstorage.blob.core.windows.net
+    blob_base_url = os.environ["STORAGE_BLOB_BASE_URL"].rstrip("/")
 
     blob_url_map: dict[str, str] = {}
 
@@ -220,12 +224,9 @@ def _upload_zip_contents(
             overwrite=True,     # safe to re-run — replaces existing blob instead of failing
         )
 
-        # Build the HTTPS URL for this blob
-        # Format: https://<account>.blob.core.windows.net/<container>/<blob_path>
-        blob_url = (
-            f"https://{storage_account_name}.blob.core.windows.net"
-            f"/{SESSIONS_CONTAINER}/{blob_dest_path}"
-        )
+        # Build the public URL for this blob using the configured base URL.
+        # Format: <STORAGE_BLOB_BASE_URL>/<container>/<session_id>/<zip_internal_path>
+        blob_url = f"{blob_base_url}/{SESSIONS_CONTAINER}/{blob_dest_path}"
         blob_url_map[zip_path] = blob_url
 
         logging.info("Uploaded '%s' → '%s'", zip_path, blob_url)
@@ -471,12 +472,23 @@ def _upsert_to_cosmos(document: dict) -> None:
     db_name = os.environ["COSMOS_DB_DATABASE"]
     container_name = os.environ["COSMOS_DB_CONTAINER"]
 
-    # CosmosClient is lightweight — no persistent connection is held
-    client = CosmosClient(url=endpoint, credential=key)
+    # COSMOS_DB_DISABLE_SSL_VERIFY should be "true" only when using the local
+    # Cosmos DB emulator (which uses a self-signed certificate).
+    # Never set this to true in production.
+    disable_ssl = os.environ.get("COSMOS_DB_DISABLE_SSL_VERIFY", "false").lower() == "true"
 
-    # Get a reference to the target container (no network call yet)
-    database = client.get_database_client(db_name)
-    container = database.get_container_client(container_name)
+    # CosmosClient is lightweight — no persistent connection is held
+    client = CosmosClient(url=endpoint, credential=key, connection_verify=not disable_ssl)
+
+    # create_database_if_not_exists / create_container_if_not_exists mean the
+    # function is self-bootstrapping: first run creates the DB and container
+    # automatically, both locally and in Azure.
+    database = client.create_database_if_not_exists(id=db_name)
+    container = database.create_container_if_not_exists(
+        id=container_name,
+        # Partition key: group documents by sessionId for efficient queries
+        partition_key=PartitionKey(path="/sessionId"),
+    )
 
     try:
         container.upsert_item(document)

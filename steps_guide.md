@@ -3,6 +3,20 @@
 > **Assumption:** Your IT team has already created a Resource Group for you.
 > You will need its name — referred to as `<your-rg>` throughout this guide.
 
+> **Running on a remote machine?** Use the Docker path (Parts 1–3 below).
+> Parts 4–6 cover deploying to real Azure once local testing passes.
+
+---
+
+## Two ways to run this locally
+
+| Method | When to use |
+|---|---|
+| **Docker (recommended)** | Remote machine, IT-managed server, or any machine where Docker is available |
+| **func start directly** | Your own laptop with Python + Node.js installed |
+
+This guide covers **Docker first**, then Azure deployment.
+
 ---
 
 ## Overview of what we are building
@@ -27,48 +41,122 @@ Mobile App uploads a .zip file
 
 ---
 
-## Part 1 — Install tools on your machine (one-time)
+## Part 1 — Local testing with Docker (recommended for remote machines)
 
-### 1.1 — Node.js
+### 1.1 — Install Docker
 
-Required to install Azure Functions Core Tools.
+If Docker is not already installed on your remote machine, ask your IT team to install **Docker Desktop** (Windows/Mac) or **Docker Engine + Docker Compose** (Linux).
 
-Download and install from: **https://nodejs.org** (choose the LTS version)
-
-Verify:
+Verify both are available:
 ```bash
-node --version
+docker --version
+docker compose version
 ```
 
 ---
 
-### 1.2 — Azure Functions Core Tools
+### 1.2 — Build and start everything
 
-This gives you the `func` command to run functions locally.
+From the project folder, run:
 
 ```bash
-npm install -g azure-functions-core-tools@4 --unsafe-perm true
+docker compose up --build
 ```
 
-Verify:
+What this does, step by step:
+1. **Builds** the function app Docker image from `Dockerfile`
+2. **Starts Azurite** (local blob storage) and waits until it is ready
+3. **Starts the Cosmos DB emulator** and waits until it is ready (~2 minutes)
+4. **Runs `init_storage.py`** to create the `uploads` and `sessions` blob containers
+5. **Starts the Azure Function** — it is now listening for ZIP uploads
+
+You should eventually see this line in the logs:
+```
+ksb-func  | Functions:
+ksb-func  |     process_zip: blobTrigger
+```
+
+> The Cosmos DB emulator takes about 2 minutes to start on first run.
+> Subsequent runs are faster because data is cached in a Docker volume.
+
+---
+
+### 1.3 — Test it by uploading the sample ZIP
+
+Open a **second terminal** on your remote machine (keep `docker compose up` running in the first).
+
+Create a ZIP from the sample folder:
+
+```powershell
+# PowerShell
+Compress-Archive -Path .\sample_zip_file_extracted\* -DestinationPath .\test_upload.zip
+```
+
 ```bash
-func --version
-# Expected output: 4.x.x
+# Or on Linux/Mac
+cd sample_zip_file_extracted && zip -r ../test_upload.zip . && cd ..
+```
+
+Upload it to the `uploads` container in Azurite:
+
+```bash
+# Copy the AZURITE_CONNECTION_STRING value from your .env file, then run:
+docker run --rm \
+  --network ksb-azure-functions_default \
+  mcr.microsoft.com/azure-cli \
+  az storage blob upload \
+    --container-name uploads \
+    --file /dev/stdin \
+    --name test_upload.zip \
+    --connection-string "<paste AZURITE_CONNECTION_STRING value from your .env>"
+```
+
+> **Simpler alternative** — if you have the Azure CLI installed on the same machine:
+> ```bash
+> # Copy AZURITE_CONNECTION_STRING from .env, change the BlobEndpoint host to localhost
+> az storage blob upload \
+>   --container-name uploads \
+>   --file test_upload.zip \
+>   --name test_upload.zip \
+>   --connection-string "<paste AZURITE_CONNECTION_STRING from .env, replacing 'azurite' with 'localhost'>"
+> ```
+
+Watch the first terminal. You should see:
+```
+ksb-func  | [Information] Blob trigger fired — blob: 'uploads/test_upload.zip'
+ksb-func  | [Information] Session ID: 'test_upload'
+ksb-func  | [Information] ZIP read into memory (... bytes)
+ksb-func  | [Information] Uploaded 'results.json' → http://localhost:10000/...
+ksb-func  | [Information] Uploaded 'crops/photo_crop_0.jpg' → http://localhost:10000/...
+ksb-func  | [Information] Cosmos DB upsert succeeded for id='318_springburn_road_...'
+ksb-func  | [Information] Done. Cosmos DB document id='...' upserted for session='test_upload'.
+```
+
+If you see all of the above — the function is working correctly.
+
+---
+
+### 1.4 — Useful Docker commands
+
+```bash
+# View logs from just the function (not all services)
+docker compose logs -f func
+
+# Stop all containers (keeps stored data)
+docker compose down
+
+# Stop all containers AND delete stored data (fresh start)
+docker compose down -v
+
+# Rebuild after code changes
+docker compose up --build
 ```
 
 ---
 
-### 1.3 — Azurite (local Blob Storage emulator)
+## Part 2 — Install tools for Azure deployment (one-time)
 
-Azurite pretends to be Azure Blob Storage on your laptop so you can test without touching the real cloud.
-
-```bash
-npm install -g azurite
-```
-
----
-
-### 1.4 — Azure CLI
+### 2.1 — Azure CLI
 
 Used to create Azure resources and deploy your function.
 
@@ -81,71 +169,21 @@ az --version
 
 ---
 
-### 1.5 — Python 3.11
+### 2.2 — Azure Functions Core Tools
 
-Azure Functions works best with Python 3.11.
+Used for the `func azure functionapp publish` deploy command.
 
-Download from: **https://python.org** if not already installed.
+```bash
+npm install -g azure-functions-core-tools@4 --unsafe-perm true
+```
 
 Verify:
 ```bash
-python --version
-# Expected output: Python 3.11.x
+func --version
+# Expected output: 4.x.x
 ```
 
----
-
-## Part 2 — Set up the project locally
-
-### 2.1 — Create a Python virtual environment
-
-Open a terminal, navigate to the project folder, and run:
-
-```bash
-cd C:\Users\bb41\Documents\v2\ksb-azure-functions
-
-# Create a virtual environment called .venv
-python -m venv .venv
-
-# Activate it (Windows)
-.venv\Scripts\activate
-
-# Your terminal prompt should now start with (.venv)
-```
-
----
-
-### 2.2 — Install Python dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-### 2.3 — Fill in your local settings
-
-Open `local.settings.json` and fill in your Cosmos DB details.
-The storage values stay as-is for local testing (they point to Azurite).
-
-```json
-{
-  "IsEncrypted": false,
-  "Values": {
-    "FUNCTIONS_WORKER_RUNTIME": "python",
-    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "STORAGE_ACCOUNT_NAME": "devstoreaccount1",
-    "COSMOS_DB_ENDPOINT": "https://<YOUR-COSMOS-ACCOUNT>.documents.azure.com:443/",
-    "COSMOS_DB_KEY": "<YOUR-COSMOS-KEY>",
-    "COSMOS_DB_DATABASE": "ksb-db",
-    "COSMOS_DB_CONTAINER": "results"
-  }
-}
-```
-
-> You will create the Cosmos DB account in Part 3 and come back to fill this in.
-> If you want to test Cosmos DB locally too, install the Cosmos DB Emulator:
-> https://aka.ms/cosmosdb-emulator
+> Node.js is required for this. Download from **https://nodejs.org** (LTS version).
 
 ---
 
@@ -261,97 +299,19 @@ az functionapp config appsettings set \
   --name ksb-func-app \
   --resource-group <your-rg> \
   --settings \
-    STORAGE_ACCOUNT_NAME=ksbstorage \
+    STORAGE_BLOB_BASE_URL=https://ksbstorage.blob.core.windows.net \
     COSMOS_DB_ENDPOINT=https://ksb-cosmos.documents.azure.com:443/ \
     COSMOS_DB_KEY=$COSMOS_KEY \
     COSMOS_DB_DATABASE=ksb-db \
-    COSMOS_DB_CONTAINER=results
+    COSMOS_DB_CONTAINER=results \
+    COSMOS_DB_DISABLE_SSL_VERIFY=false
 ```
 
 ---
 
-## Part 4 — Test locally before deploying
+## Part 4 — Deploy to Azure
 
-### 4.1 — Start Azurite (Terminal 1)
-
-Open a new terminal window and run:
-
-```bash
-mkdir .azurite
-azurite --location .azurite
-```
-
-Leave this running. You should see:
-```
-Azurite Blob service is starting ...
-Azurite Blob service is successfully listening at http://127.0.0.1:10000
-```
-
----
-
-### 4.2 — Create local blob containers (Terminal 2)
-
-In a second terminal:
-
-```bash
-az storage container create --name uploads --connection-string "UseDevelopmentStorage=true"
-az storage container create --name sessions --connection-string "UseDevelopmentStorage=true"
-```
-
----
-
-### 4.3 — Start the function (Terminal 2)
-
-Make sure your virtual environment is active:
-
-```bash
-cd C:\Users\bb41\Documents\v2\ksb-azure-functions
-.venv\Scripts\activate
-func start
-```
-
-You should see:
-```
-Functions:
-    process_zip: blobTrigger
-```
-
----
-
-### 4.4 — Upload the sample ZIP to trigger the function
-
-In a third terminal, create a ZIP from the sample folder and upload it:
-
-```powershell
-# Create the test ZIP (PowerShell)
-Compress-Archive -Path .\sample_zip_file_extracted\* -DestinationPath .\test_upload.zip
-
-# Upload it to local Azurite storage
-az storage blob upload `
-  --container-name uploads `
-  --file test_upload.zip `
-  --name test_upload.zip `
-  --connection-string "UseDevelopmentStorage=true"
-```
-
-Watch Terminal 2. You should see logs like:
-
-```
-[Information] Blob trigger fired — blob: 'uploads/test_upload.zip', size: ... bytes
-[Information] Session ID: 'test_upload'
-[Information] Uploaded 'results.json' → https://devstoreaccount1...
-[Information] Uploaded 'crops/photo_crop_0.jpg' → https://devstoreaccount1...
-[Information] Cosmos DB upsert succeeded for id='318_springburn_road_...'
-[Information] Done. Cosmos DB document id='...' upserted for session='test_upload'.
-```
-
-If you see all of the above, the function is working correctly.
-
----
-
-## Part 5 — Deploy to Azure
-
-Once local testing passes, deploy with one command:
+Once local Docker testing passes, deploy with one command:
 
 ```bash
 func azure functionapp publish ksb-func-app
@@ -365,7 +325,7 @@ Remote build succeeded!
 
 ---
 
-### 5.1 — Test in the cloud
+### 4.1 — Test in the cloud
 
 Upload a ZIP to the real `uploads` container:
 
@@ -402,18 +362,23 @@ Then check the logs in the Azure Portal:
 
 ## Troubleshooting
 
-**`func` command not found**
-> Close and reopen your terminal after installing Core Tools.
+**Cosmos DB emulator takes too long / never becomes healthy**
+> It needs ~2 minutes on first start. Run `docker compose logs cosmosdb` to watch it.
+> If your machine has less than 3 GB of free RAM, reduce `AZURE_COSMOS_EMULATOR_PARTITION_COUNT` to `3` in `docker-compose.yml`.
 
-**Trigger does not fire locally**
-> Make sure Azurite is running (Terminal 1) before you start `func start`.
-
-**`CosmosHttpResponseError` in logs**
-> Double-check `COSMOS_DB_ENDPOINT` and `COSMOS_DB_KEY` in `local.settings.json`.
+**Trigger does not fire after uploading a ZIP**
+> Check `docker compose logs func` for errors.
+> Make sure the file name ends in `.zip` — other extensions are silently skipped.
 
 **`BlobServiceError` when uploading extracted files**
-> Make sure both `uploads` and `sessions` containers exist (Step 4.2).
+> The `init-storage` container may have failed. Run `docker compose logs init-storage`.
+> Try `docker compose down -v && docker compose up --build` for a clean restart.
 
-**Function deploys but does not trigger in Azure**
-> Confirm the `uploads` container exists in `ksbstorage` (Step 3.1).
-> In the Azure Portal, go to your Function App → Configuration and verify all App Settings are present.
+**`CosmosHttpResponseError` in logs**
+> Check that `COSMOS_DB_DISABLE_SSL_VERIFY=true` is set in `docker-compose.yml` for local runs.
+> The emulator uses a self-signed certificate — SSL verification must be disabled locally.
+
+**Function deploys to Azure but does not trigger**
+> Confirm the `uploads` container exists in `ksbstorage` (Part 3.1).
+> In the Azure Portal → your Function App → Configuration, verify all App Settings are present.
+> Make sure `COSMOS_DB_DISABLE_SSL_VERIFY` is set to `false` (or removed) in Azure.

@@ -1,0 +1,150 @@
+# -----------------------------------------------------------------------
+# docker-compose.yml — KSB Azure Functions local development stack
+# -----------------------------------------------------------------------
+# Starts four services in the correct order:
+#
+#   1. azurite      — local Azure Blob Storage emulator
+#   2. cosmosdb     — local Azure Cosmos DB emulator
+#   3. init-storage — one-shot container that creates the required blob
+#                     containers (uploads + sessions) inside Azurite
+#   4. func         — the Azure Function app (our code)
+#
+# Secrets and configuration are read from .env (gitignored).
+# Copy .env.example → .env and fill in the values before running.
+#
+# Usage:
+#   docker compose up --build          # first time or after code changes
+#   docker compose up                  # subsequent runs
+#   docker compose down                # stop everything
+#   docker compose down -v             # stop and wipe all stored data
+# -----------------------------------------------------------------------
+
+services:
+
+  # -----------------------------------------------------------------------
+  # 1. Azurite — local Azure Blob Storage emulator
+  #    Exposes port 10000 (Blob only — we don't need Queue or Table).
+  #    Blob data is stored in a named Docker volume so it persists between
+  #    "docker compose down / up" cycles.
+  # -----------------------------------------------------------------------
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    container_name: ksb-azurite
+    restart: unless-stopped
+    ports:
+      - "10000:10000"     # Blob Storage endpoint — accessible at localhost:10000
+    # Run only the blob service (skip queue/table to reduce startup noise)
+    command: azurite-blob --blobHost 0.0.0.0 --loose
+    volumes:
+      - azurite_data:/data
+    healthcheck:
+      # Use Node.js (built into the Azurite image) to probe the TCP port.
+      # Exits 0 if the port is open, 1 if not — Docker uses this to know
+      # when Azurite is ready before starting dependent services.
+      test: >
+        CMD-SHELL node -e
+        "const net=require('net');
+         const s=net.createConnection(10000,'127.0.0.1');
+         s.on('connect',()=>{s.destroy();process.exit(0)});
+         s.on('error',()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # -----------------------------------------------------------------------
+  # 2. Cosmos DB Emulator — local NoSQL database
+  #    NOTE: This image requires at least 3 GB of RAM.
+  #          If your machine has less, reduce PARTITION_COUNT to 3.
+  #    Data is persisted in a named volume.
+  #    The emulator uses a self-signed TLS certificate — that is why
+  #    COSMOS_DB_DISABLE_SSL_VERIFY=true is set in the func service below.
+  # -----------------------------------------------------------------------
+  cosmosdb:
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator
+    container_name: ksb-cosmosdb
+    restart: unless-stopped
+    mem_limit: 3g
+    ports:
+      - "8081:8081"                    # Main Cosmos DB endpoint
+      - "10251-10254:10251-10254"      # Internal partition ports
+    environment:
+      AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 10
+      AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "true"
+      # Bind to all interfaces so the func container can reach it
+      AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE: "0.0.0.0"
+    volumes:
+      - cosmos_data:/tmp/cosmos/appdata
+    healthcheck:
+      # The emulator exposes its SSL certificate at /_explorer/emulator.pem
+      # once it has fully started. -k skips certificate validation (self-signed).
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8081/_explorer/emulator.pem"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s    # The emulator takes ~2 minutes to initialise
+
+  # -----------------------------------------------------------------------
+  # 3. init-storage — one-shot setup container
+  #    Runs init_storage.py to create the "uploads" and "sessions" blob
+  #    containers inside Azurite.  Exits immediately after — Docker Compose
+  #    waits for it to complete successfully before starting the func service.
+  # -----------------------------------------------------------------------
+  init-storage:
+    build: .
+    container_name: ksb-init-storage
+    # Override the default entrypoint (the Functions host) with our script
+    command: python /home/site/wwwroot/init_storage.py
+    depends_on:
+      azurite:
+        condition: service_healthy    # wait until Azurite's port is open
+    environment:
+      # Full Azurite connection string — value comes from .env
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURITE_CONNECTION_STRING}
+    restart: "no"   # run once and exit — do NOT restart on failure
+
+  # -----------------------------------------------------------------------
+  # 4. func — the Azure Function app (our code)
+  #    Waits for Azurite containers to exist AND Cosmos DB to be ready.
+  #    Port 7071 maps to the Functions host's HTTP port inside the container.
+  # -----------------------------------------------------------------------
+  func:
+    build: .
+    container_name: ksb-func
+    ports:
+      - "7071:80"     # Azure Functions HTTP port — visit http://localhost:7071
+    depends_on:
+      init-storage:
+        condition: service_completed_successfully  # containers must be created first
+      cosmosdb:
+        condition: service_healthy                 # wait for Cosmos DB to be ready
+    environment:
+      # ---- Azure Storage (Azurite) ----
+      # Connection string uses the internal Docker hostname "azurite" (not localhost)
+      # so the function can reach Azurite from inside the Docker network.
+      # Value comes from .env via ${} substitution.
+      AzureWebJobsStorage: ${AZURITE_CONNECTION_STRING}
+
+      # Base URL used when building blob URLs stored in Cosmos DB.
+      # Uses localhost so URLs are accessible from outside Docker.
+      STORAGE_BLOB_BASE_URL: ${STORAGE_BLOB_BASE_URL}
+
+      # ---- Cosmos DB ----
+      # Uses the internal Docker hostname "cosmosdb" so the function can
+      # reach the emulator from inside the Docker network.
+      COSMOS_DB_ENDPOINT: ${COSMOS_DB_ENDPOINT}
+      COSMOS_DB_KEY: ${COSMOS_DB_KEY}
+      COSMOS_DB_DATABASE: ${COSMOS_DB_DATABASE}
+      COSMOS_DB_CONTAINER: ${COSMOS_DB_CONTAINER}
+
+      # Must be "true" when using the local emulator (self-signed certificate).
+      # Set to "false" in Azure — the real Cosmos DB uses a valid certificate.
+      COSMOS_DB_DISABLE_SSL_VERIFY: ${COSMOS_DB_DISABLE_SSL_VERIFY}
+
+# -----------------------------------------------------------------------
+# Named volumes — data persists between "docker compose down / up" cycles.
+# Run "docker compose down -v" to delete data and start fresh.
+# -----------------------------------------------------------------------
+volumes:
+  azurite_data:
+  cosmos_data:

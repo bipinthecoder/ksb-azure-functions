@@ -6,7 +6,10 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Secrets — never commit the real .env
 .env
+# .env.example IS safe to commit — it has no real values
 
 # Azure Functions local state
 .python_packages/
