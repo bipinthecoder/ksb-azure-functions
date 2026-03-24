@@ -1,43 +1,25 @@
 # -----------------------------------------------------------------------
 # docker-compose.yml — KSB Azure Functions local development stack
 # -----------------------------------------------------------------------
-# Starts four services in the correct order:
-#
-#   1. azurite      — local Azure Blob Storage emulator
-#   2. cosmosdb     — local Azure Cosmos DB emulator
-#   3. init-storage — one-shot container that creates the required blob
-#                     containers (uploads + sessions) inside Azurite
-#   4. func         — the Azure Function app (our code)
-#
-# Secrets and configuration are read from .env (gitignored).
-# Copy .env.example → .env and fill in the values before running.
-#
-# Usage:
-#   docker compose up --build          # first time or after code changes
-#   docker compose up                  # subsequent runs
-#   docker compose down                # stop everything
-#   docker compose down -v             # stop and wipe all stored data
-# -----------------------------------------------------------------------
 
 services:
 
   # -----------------------------------------------------------------------
-  # 1. Azurite — local Azure Blob Storage emulator
-  #    Exposes port 10000 (Blob only — we don't need Queue or Table).
-  #    Blob data is stored in a named Docker volume so it persists between
-  #    "docker compose down / up" cycles.
+  # 1. Azurite — local Azure Storage emulator
+  #    Blob + Queue are both needed for Azure Functions blob triggers.
   # -----------------------------------------------------------------------
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite
     container_name: ksb-azurite
     restart: unless-stopped
     ports:
-      - "10000:10000"
-    command: azurite-blob --blobHost 0.0.0.0 --loose
+      - "10000:10000"   # Blob
+      - "10001:10001"   # Queue
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --loose
     volumes:
       - azurite_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('net').createConnection(10000,'127.0.0.1').on('connect',function(){process.exit(0)}).on('error',function(){process.exit(1)})\""]
+      test: ["CMD-SHELL", "node -e \"const net=require('net'); let ok=0; const done=()=>{if(++ok===2) process.exit(0)}; net.createConnection(10000,'127.0.0.1').on('connect',done).on('error',()=>process.exit(1)); net.createConnection(10001,'127.0.0.1').on('connect',done).on('error',()=>process.exit(1));\""]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -79,7 +61,7 @@ services:
       azurite:
         condition: service_healthy
     environment:
-      AZURITE_CONNECTION_STRING: ${AZURITE_CONNECTION_STRING}
+      AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;"
     restart: "no"
 
   # -----------------------------------------------------------------------
@@ -96,7 +78,7 @@ services:
       cosmosdb:
         condition: service_healthy
     environment:
-      AzureWebJobsStorage: ${AZURITE_CONNECTION_STRING}
+      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;"
       STORAGE_BLOB_BASE_URL: ${STORAGE_BLOB_BASE_URL}
       COSMOS_DB_ENDPOINT: ${COSMOS_DB_ENDPOINT}
       COSMOS_DB_KEY: ${COSMOS_DB_KEY}
