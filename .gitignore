@@ -1,0 +1,16 @@
+# Local settings contain secrets — never commit this
+local.settings.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Azure Functions local state
+.python_packages/
+.azure/
+
+# Azurite local emulator data
+.azurite/

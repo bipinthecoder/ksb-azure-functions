@@ -1,0 +1,9 @@
+# Azure Functions Python worker
+azure-functions==1.21.3
+
+# Cosmos DB SDK — used to upsert parsed results into the database
+azure-cosmos==4.7.0
+
+# Azure Blob Storage SDK — optional, needed if you later want to generate
+# SAS URLs or read/write blobs from within the function
+azure-storage-blob==12.22.0
