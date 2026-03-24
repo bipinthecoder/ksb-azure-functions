@@ -300,6 +300,11 @@ def _build_cosmos_document(
         # Cosmos DB requires a string "id" field on every document
         "id": document_id,
 
+        # ---- Partition key — every document must have this field ----
+        # The Cosmos DB container is partitioned by /orgId, so this field
+        # must be present and non-null for efficient storage and querying.
+        "orgId": results.get("orgId"),
+
         # ---- Session / ingestion provenance ----
         "sessionId": session_id,
         "sourceZip": source_zip_blob,           # which ZIP file produced this document
@@ -486,8 +491,9 @@ def _upsert_to_cosmos(document: dict) -> None:
     database = client.create_database_if_not_exists(id=db_name)
     container = database.create_container_if_not_exists(
         id=container_name,
-        # Partition key: group documents by sessionId for efficient queries
-        partition_key=PartitionKey(path="/sessionId"),
+        # Partition key matches the container configured in Azure Cosmos DB.
+        # All documents must include an "orgId" field.
+        partition_key=PartitionKey(path="/orgId"),
     )
 
     try:
