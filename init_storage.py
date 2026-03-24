@@ -21,7 +21,8 @@ import logging
 import os
 import sys
 
-from azure.storage.blob import BlobServiceClient, StorageSharedKeyCredential
+from azure.storage.blob import BlobServiceClient
+from azure.storage.blob._shared.authentication import StorageSharedKeyCredential
 from azure.core.exceptions import ResourceExistsError
 
 # Send logs to stdout so they appear in "docker compose logs init-storage"
