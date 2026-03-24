@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, StorageSharedKeyCredential
 from azure.core.exceptions import ResourceExistsError
 
 # Send logs to stdout so they appear in "docker compose logs init-storage"
@@ -35,20 +35,7 @@ logging.basicConfig(
 CONTAINERS = ["uploads", "sessions"]
 
 
-def build_connection_string() -> str:
-    """
-    Build the Azurite connection string from individual environment variables.
-
-    Using individual variables avoids issues where a pre-built connection
-    string containing '=', ';', or ':' characters gets corrupted during
-    Docker Compose YAML variable substitution.
-
-    Env vars:
-        AZURITE_ACCOUNT_KEY  — the storage account key (falls back to the
-                               well-known public Azurite development key)
-        AZURITE_HOST         — hostname of the Azurite container (default: azurite)
-        AZURITE_PORT         — blob service port (default: 10000)
-    """
+def main() -> None:
     # Azurite's fixed, publicly documented development key.
     # It is the same on every machine and only works with the local emulator,
     # not with real Azure Storage — safe to use as a hardcoded default.
@@ -57,6 +44,7 @@ def build_connection_string() -> str:
         "nDkHl02wH0bM68pPQJQiKsQ=="
     )
 
+    account_name = "devstoreaccount1"
     # .strip() removes any invisible characters (e.g. \r from Windows line
     # endings in .env files) that would silently corrupt the HMAC signature.
     key  = (os.environ.get("AZURITE_ACCOUNT_KEY") or AZURITE_DEFAULT_KEY).strip()
@@ -65,22 +53,17 @@ def build_connection_string() -> str:
 
     logging.info("Key length: %d, last 6 chars: ...%s", len(key), key[-6:])
 
-    return (
-        f"DefaultEndpointsProtocol=http;"
-        f"AccountName=devstoreaccount1;"
-        f"AccountKey={key};"
-        f"BlobEndpoint=http://{host}:{port}/devstoreaccount1;"
-    )
+    # Use StorageSharedKeyCredential + explicit account_url instead of
+    # from_connection_string().  When from_connection_string() parses a
+    # path-style emulator URL (http://azurite:10000/devstoreaccount1) it can
+    # misidentify the account name, which corrupts the HMAC canonical resource
+    # string and causes a 403 AuthorizationFailure even with the correct key.
+    credential = StorageSharedKeyCredential(account_name, key)
+    account_url = f"http://{host}:{port}/{account_name}"
 
+    logging.info("Connecting to Blob Storage at %s ...", account_url)
 
-def main() -> None:
-    conn_str = build_connection_string()
-    logging.info("Connecting to Blob Storage at %s:%s ...",
-                 os.environ.get("AZURITE_HOST", "azurite"),
-                 os.environ.get("AZURITE_PORT", "10000"))
-
-    # Connect to Azurite (or Azure Storage if run against a real account)
-    client = BlobServiceClient.from_connection_string(conn_str)
+    client = BlobServiceClient(account_url=account_url, credential=credential)
     logging.info("Connected to Blob Storage.")
 
     for name in CONTAINERS:
