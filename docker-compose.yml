@@ -94,8 +94,12 @@ services:
       azurite:
         condition: service_healthy    # wait until Azurite's port is open
     environment:
-      # Full Azurite connection string — value comes from .env
-      AZURE_STORAGE_CONNECTION_STRING: ${AZURITE_CONNECTION_STRING}
+      # Pass only the account key — init_storage.py builds the full
+      # connection string internally to avoid YAML substitution issues
+      # with special characters (=, ;, :) inside connection strings.
+      AZURITE_ACCOUNT_KEY: ${AZURITE_ACCOUNT_KEY}
+      AZURITE_HOST: azurite
+      AZURITE_PORT: "10000"
     restart: "no"   # run once and exit — do NOT restart on failure
 
   # -----------------------------------------------------------------------
