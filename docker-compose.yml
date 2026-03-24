@@ -32,15 +32,11 @@ services:
     container_name: ksb-azurite
     restart: unless-stopped
     ports:
-      - "10000:10000"     # Blob Storage endpoint — accessible at localhost:10000
-    # Run only the blob service (skip queue/table to reduce startup noise)
+      - "10000:10000"
     command: azurite-blob --blobHost 0.0.0.0 --loose
     volumes:
       - azurite_data:/data
     healthcheck:
-      # Use Node.js (built into the Azurite image) to probe the TCP port.
-      # Exits 0 if the port is open, 1 if not — Docker uses this to know
-      # when Azurite is ready before starting dependent services.
       test: ["CMD-SHELL", "node -e \"require('net').createConnection(10000,'127.0.0.1').on('connect',function(){process.exit(0)}).on('error',function(){process.exit(1)})\""]
       interval: 5s
       timeout: 5s
@@ -49,11 +45,6 @@ services:
 
   # -----------------------------------------------------------------------
   # 2. Cosmos DB Emulator — local NoSQL database
-  #    NOTE: This image requires at least 3 GB of RAM.
-  #          If your machine has less, reduce PARTITION_COUNT to 3.
-  #    Data is persisted in a named volume.
-  #    The emulator uses a self-signed TLS certificate — that is why
-  #    COSMOS_DB_DISABLE_SSL_VERIFY=true is set in the func service below.
   # -----------------------------------------------------------------------
   cosmosdb:
     image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator
@@ -61,89 +52,58 @@ services:
     restart: unless-stopped
     mem_limit: 3g
     ports:
-      - "8081:8081"                    # Main Cosmos DB endpoint
-      - "10251-10254:10251-10254"      # Internal partition ports
+      - "8081:8081"
+      - "10251-10254:10251-10254"
     environment:
       AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 10
       AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "true"
-      # Bind to all interfaces so the func container can reach it
       AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE: "0.0.0.0"
     volumes:
       - cosmos_data:/tmp/cosmos/appdata
     healthcheck:
-      # The emulator exposes its SSL certificate at /_explorer/emulator.pem
-      # once it has fully started. -k skips certificate validation (self-signed).
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8081/_explorer/emulator.pem"]
       interval: 30s
       timeout: 10s
       retries: 20
-      start_period: 120s    # The emulator takes ~2 minutes to initialise
+      start_period: 120s
 
   # -----------------------------------------------------------------------
   # 3. init-storage — one-shot setup container
-  #    Runs init_storage.py to create the "uploads" and "sessions" blob
-  #    containers inside Azurite.  Exits immediately after — Docker Compose
-  #    waits for it to complete successfully before starting the func service.
   # -----------------------------------------------------------------------
   init-storage:
     build:
       context: .
-      dockerfile: init.Dockerfile   # plain Python image — avoids Azure Functions
-    container_name: ksb-init-storage  # base image env vars interfering with auth
+      dockerfile: init.Dockerfile
+    container_name: ksb-init-storage
     depends_on:
       azurite:
-        condition: service_healthy    # wait until Azurite's port is open
+        condition: service_healthy
     environment:
-      # Pass only the account key — init_storage.py builds the full
-      # connection string internally to avoid YAML substitution issues
-      # with special characters (=, ;, :) inside connection strings.
-      AZURITE_ACCOUNT_KEY: ${AZURITE_ACCOUNT_KEY}
-      AZURITE_HOST: azurite
-      AZURITE_PORT: "10000"
-    restart: "no"   # run once and exit — do NOT restart on failure
+      AZURITE_CONNECTION_STRING: ${AZURITE_CONNECTION_STRING}
+    restart: "no"
 
   # -----------------------------------------------------------------------
-  # 4. func — the Azure Function app (our code)
-  #    Waits for Azurite containers to exist AND Cosmos DB to be ready.
-  #    Port 7071 maps to the Functions host's HTTP port inside the container.
+  # 4. func — the Azure Function app
   # -----------------------------------------------------------------------
   func:
     build: .
     container_name: ksb-func
     ports:
-      - "7071:80"     # Azure Functions HTTP port — visit http://localhost:7071
+      - "7071:80"
     depends_on:
       init-storage:
-        condition: service_completed_successfully  # containers must be created first
+        condition: service_completed_successfully
       cosmosdb:
-        condition: service_healthy                 # wait for Cosmos DB to be ready
+        condition: service_healthy
     environment:
-      # ---- Azure Storage (Azurite) ----
-      # Connection string uses the internal Docker hostname "azurite" (not localhost)
-      # so the function can reach Azurite from inside the Docker network.
-      # Value comes from .env via ${} substitution.
       AzureWebJobsStorage: ${AZURITE_CONNECTION_STRING}
-
-      # Base URL used when building blob URLs stored in Cosmos DB.
-      # Uses localhost so URLs are accessible from outside Docker.
       STORAGE_BLOB_BASE_URL: ${STORAGE_BLOB_BASE_URL}
-
-      # ---- Cosmos DB ----
-      # Uses the internal Docker hostname "cosmosdb" so the function can
-      # reach the emulator from inside the Docker network.
       COSMOS_DB_ENDPOINT: ${COSMOS_DB_ENDPOINT}
       COSMOS_DB_KEY: ${COSMOS_DB_KEY}
       COSMOS_DB_DATABASE: ${COSMOS_DB_DATABASE}
       COSMOS_DB_CONTAINER: ${COSMOS_DB_CONTAINER}
-
-      # Must be "true" when using the local emulator (self-signed certificate).
-      # Set to "false" in Azure — the real Cosmos DB uses a valid certificate.
       COSMOS_DB_DISABLE_SSL_VERIFY: ${COSMOS_DB_DISABLE_SSL_VERIFY}
 
-# -----------------------------------------------------------------------
-# Named volumes — data persists between "docker compose down / up" cycles.
-# Run "docker compose down -v" to delete data and start fresh.
-# -----------------------------------------------------------------------
 volumes:
   azurite_data:
   cosmos_data:
