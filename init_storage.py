@@ -57,11 +57,13 @@ def build_connection_string() -> str:
         "nDkHl02wH0bM68pPQJQiKsQ=="
     )
 
-    key  = os.environ.get("AZURITE_ACCOUNT_KEY") or AZURITE_DEFAULT_KEY
+    # .strip() removes any invisible characters (e.g. \r from Windows line
+    # endings in .env files) that would silently corrupt the HMAC signature.
+    key  = (os.environ.get("AZURITE_ACCOUNT_KEY") or AZURITE_DEFAULT_KEY).strip()
     host = os.environ.get("AZURITE_HOST", "azurite")
     port = os.environ.get("AZURITE_PORT", "10000")
 
-    logging.info("Using account key (last 6 chars): ...%s", key[-6:])
+    logging.info("Key length: %d, last 6 chars: ...%s", len(key), key[-6:])
 
     return (
         f"DefaultEndpointsProtocol=http;"

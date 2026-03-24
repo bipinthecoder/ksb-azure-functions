@@ -86,10 +86,10 @@ services:
   #    waits for it to complete successfully before starting the func service.
   # -----------------------------------------------------------------------
   init-storage:
-    build: .
-    container_name: ksb-init-storage
-    # Override the default entrypoint (the Functions host) with our script
-    command: python /home/site/wwwroot/init_storage.py
+    build:
+      context: .
+      dockerfile: init.Dockerfile   # plain Python image — avoids Azure Functions
+    container_name: ksb-init-storage  # base image env vars interfering with auth
     depends_on:
       azurite:
         condition: service_healthy    # wait until Azurite's port is open
