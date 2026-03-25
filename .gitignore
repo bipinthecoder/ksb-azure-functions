@@ -17,3 +17,4 @@ venv/
 
 # Azurite local emulator data
 .azurite/
+test1.zip

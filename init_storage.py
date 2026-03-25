@@ -4,7 +4,7 @@ init_storage.py
 One-shot setup script run by the "init-storage" Docker Compose service.
 
 Creates the two blob containers the function depends on inside Azurite:
-    uploads
+    litter-detection-sbx
     sessions
 
 Uses the Azure Blob Storage SDK and the standard Azurite local
@@ -24,7 +24,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-CONTAINERS = ["uploads", "sessions"]
+CONTAINERS = ["litter-detection-sbx", "sessions"]
 
 # Correct Azurite default dev key for devstoreaccount1
 AZURITE_DEFAULT_CONNECTION_STRING = (

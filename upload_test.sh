@@ -1,7 +1,7 @@
 #!/bin/bash
 # upload_test.sh
 # --------------
-# Uploads the sample ZIP into the Azurite "uploads" container from inside
+# Uploads the sample ZIP into the Azurite "litter-detection-sbx" container from inside
 # the running func container — no GUI or Azure CLI required.
 #
 # Usage:
@@ -27,13 +27,13 @@ else
   ZIP_PATH="/tmp/upload_target.zip"
 fi
 
-echo "Uploading '$BLOB_NAME' to Azurite uploads container..."
+echo "Uploading '$BLOB_NAME' to Azurite litter-detection-sbx container..."
 docker exec ksb-func python3 -c "
 import os
 from azure.storage.blob import BlobServiceClient
 client = BlobServiceClient.from_connection_string(os.environ['AzureWebJobsStorage'])
 with open('${ZIP_PATH}', 'rb') as f:
-    client.get_blob_client('uploads', '${BLOB_NAME}').upload_blob(f, overwrite=True)
+    client.get_blob_client('litter-detection-sbx', '${BLOB_NAME}').upload_blob(f, overwrite=True)
 print('Done — blob uploaded as: ${BLOB_NAME}')
 print('Run: docker compose logs -f func  to watch the trigger.')
 "
